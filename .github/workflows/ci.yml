@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  build-test-security:
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: "3.11"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pre-commit==3.7.1
+
+      - name: Run unit tests
+        run: pytest -q
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Static Application Security Testing (CodeQL)
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "bot-detector"
+        continue-on-error: true
+
+      - name: Container build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: bot-detector:ci
+
+      - name: Scan container image (Trivy)
+        uses: aquasecurity/trivy-action@0.27.0
+        with:
+          image-ref: bot-detector:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Sign image (Cosign keyless)
+        if: ${{ github.event_name == 'push' }}
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: cosign sign --dry-run bot-detector:ci
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            sbom.spdx.json
+
+  deploy:
+    needs: build-test-security
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: production
+      url: https://your-domain.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require manual approval
+        uses: hmarr/await-approval@v2
+        with:
+          reviewers: ${{ join(github.event.pull_request.requested_reviewers.*.login, ',') }}
+          timeout: 1200
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Apply manifests
+        run: |
+          kubectl apply -f k8s/configmap-secret.yaml
+          kubectl apply -f k8s/redis.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/hpa-rps.yaml
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}

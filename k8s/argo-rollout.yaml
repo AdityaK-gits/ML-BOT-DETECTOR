@@ -1,0 +1,59 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: bot-detector-rollout
+spec:
+  replicas: 4
+  strategy:
+    canary:
+      canaryService: bot-detector-canary
+      stableService: bot-detector
+      trafficRouting:
+        nginx: {}
+      steps:
+        - setWeight: 10
+        - pause: {duration: 60}
+        - setWeight: 25
+        - pause: {duration: 120}
+        - setWeight: 50
+        - pause: {duration: 180}
+        - setWeight: 100
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: bot-detector
+  template:
+    metadata:
+      labels:
+        app: bot-detector
+    spec:
+      containers:
+        - name: api
+          image: your-registry/bot-detector:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: bot-detector-config
+            - secretRef:
+                name: bot-detector-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bot-detector-canary
+spec:
+  selector:
+    app: bot-detector
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000

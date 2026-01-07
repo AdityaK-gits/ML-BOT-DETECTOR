@@ -1,0 +1,166 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot-detector
+  labels:
+    app: bot-detector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bot-detector
+  template:
+    metadata:
+      labels:
+        app: bot-detector
+    spec:
+      containers:
+        - name: api
+          image: your-registry/bot-detector:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PORT
+              value: "8000"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: POLICY_ENV_ONLY
+              value: "true"
+            - name: BOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: bot-detector-secrets
+                  key: BOT_API_KEY
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bot-detector-secrets
+                  key: REDIS_URL
+            - name: FUSION_SUPERVISED
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: FUSION_SUPERVISED
+            - name: FUSION_ANOMALY
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: FUSION_ANOMALY
+            - name: FUSION_SEQUENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: FUSION_SEQUENCE
+            - name: RISK_LOW
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: RISK_LOW
+            - name: RISK_HIGH
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: RISK_HIGH
+            - name: CALIBRATION_METHOD
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: CALIBRATION_METHOD
+            - name: CANARY_PERCENT
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: CANARY_PERCENT
+            - name: MODEL_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-detector-config
+                  key: MODEL_VERSION
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bot-detector
+spec:
+  selector:
+    app: bot-detector
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bot-detector
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+      add_header X-Content-Type-Options nosniff;
+      add_header X-Frame-Options DENY;
+      add_header Referrer-Policy no-referrer-when-downgrade;
+      add_header Content-Security-Policy "default-src 'none'";
+spec:
+  tls:
+    - hosts:
+        - your-domain.example.com
+      secretName: tls-secret
+  rules:
+    - host: your-domain.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bot-detector
+                port:
+                  number: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bot-detector-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bot-detector
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70

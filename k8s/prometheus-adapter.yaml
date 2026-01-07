@@ -1,0 +1,27 @@
+# Prometheus Adapter configuration to expose custom metrics for HPA
+# Assumes kube-prometheus-stack or Prometheus + Adapter are installed.
+# This maps a rate() over api_requests_total to a per-pod custom metric
+# 'http_requests_per_second'. Adjust label selectors to your environment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter
+  namespace: custom-metrics
+data:
+  config.yaml: |
+    rules:
+      default: false
+      seriesQuery: 'api_requests_total{pod!="",namespace!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: "^api_requests_total$"
+        as: "http_requests_per_second"
+      metricsQuery: |
+        sum by (<<.GroupBy>>) (
+          rate(api_requests_total{<<.LabelMatchers>>}[2m])
+        )
+---
+# Example HPA using custom metric (see hpa-rps.yaml for namespaced deploy)
